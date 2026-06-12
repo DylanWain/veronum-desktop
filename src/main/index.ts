@@ -30,6 +30,7 @@ import { promises as fs } from "node:fs";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, relative, sep, normalize, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { startVeronumServer } from "./server";
 
 /**
@@ -329,6 +330,47 @@ function registerIpc(): void {
       return { ok: false, error: e instanceof Error ? e.message : "write_failed" };
     }
   });
+
+  // runCommand — the Bash tool. Executes a shell command with its CWD
+  // pinned to a granted root, so the agent can run `git push`, `npm
+  // test`, `grep`, etc. — exactly how Claude Code's Bash tool works.
+  //
+  // Security posture: the command only ever runs INSIDE a directory
+  // the user explicitly picked via the native dialog (grantedRoots).
+  // We refuse if the rootId isn't granted. We run through `bash -lc`
+  // so pipes / && / env expansion behave like a real shell. A hard
+  // timeout (default 120s, cap 600s) prevents a runaway agent from
+  // hanging a command forever. stdout/stderr are capped at 1 MB so a
+  // chatty command can't blow up the IPC channel.
+  ipcMain.handle(
+    "veronum:runCommand",
+    async (_, rootId: string, command: string, opts?: { timeoutMs?: number }) => {
+      const cwd = grantedRoots.get(rootId);
+      if (!cwd) return { ok: false, code: -1, stdout: "", stderr: "root_not_granted" };
+      if (typeof command !== "string" || command.trim().length === 0) {
+        return { ok: false, code: -1, stdout: "", stderr: "empty_command" };
+      }
+      const timeout = Math.min(Math.max(Number(opts?.timeoutMs) || 120_000, 1_000), 600_000);
+      return new Promise((resolve) => {
+        execFile(
+          "/bin/bash",
+          ["-lc", command],
+          { cwd, timeout, maxBuffer: 1024 * 1024, encoding: "utf-8" },
+          (err, stdout, stderr) => {
+            const code = err && typeof (err as { code?: number }).code === "number"
+              ? (err as { code: number }).code
+              : err ? 1 : 0;
+            resolve({
+              ok: code === 0,
+              code,
+              stdout: String(stdout ?? "").slice(0, 1024 * 1024),
+              stderr: String(stderr ?? "").slice(0, 1024 * 1024),
+            });
+          },
+        );
+      });
+    },
+  );
 
   // platform — small surface the renderer uses to swap UX based on
   // wrapper (e.g., hide the "Download desktop app" CTA we'd otherwise

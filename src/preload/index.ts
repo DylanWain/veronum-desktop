@@ -51,6 +51,16 @@ const api = {
   ): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke("veronum:writeFile", rootId, relPath, content),
 
+  /** Runs a shell command with CWD pinned to a granted root — the
+   *  Bash tool. Enables git push, test runs, grep, etc. Returns the
+   *  exit code + captured stdout/stderr. */
+  runCommand: (
+    rootId: string,
+    command: string,
+    opts?: { timeoutMs?: number },
+  ): Promise<{ ok: boolean; code: number; stdout: string; stderr: string }> =>
+    ipcRenderer.invoke("veronum:runCommand", rootId, command, opts),
+
   /** Tells the website it's running inside Veronum Desktop, plus
    *  basic platform info for UI conditionals. */
   platform: (): Promise<{

@@ -27,6 +27,11 @@ declare global {
         relPath: string,
         content: string,
       ): Promise<{ ok: true } | { ok: false; error: string }>;
+      runCommand(
+        rootId: string,
+        command: string,
+        opts?: { timeoutMs?: number },
+      ): Promise<{ ok: boolean; code: number; stdout: string; stderr: string }>;
       platform(): Promise<{
         isDesktop: true;
         platform: NodeJS.Platform;
