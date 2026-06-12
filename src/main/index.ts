@@ -32,6 +32,29 @@ import { join, relative, sep, normalize, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { startVeronumServer } from "./server";
+import { runLocalAgent } from "./agent";
+
+/** The model key for the LOCAL agent loop. Resolution order:
+ *  1. ANTHROPIC_API_KEY env (dev override)
+ *  2. config.json in userData: { "anthropicKey": "sk-ant-..." }
+ *  The local loop calls Anthropic directly — no Vercel, no token
+ *  expiry. Long-term this can be a Veronum-issued key tied to the
+ *  user's plan; for now it's user-configured. */
+function loadAnthropicKey(): string | null {
+  if (process.env.ANTHROPIC_API_KEY) return process.env.ANTHROPIC_API_KEY;
+  try {
+    const p = join(app.getPath("userData"), "config.json");
+    if (existsSync(p)) {
+      const c = JSON.parse(readFileSync(p, "utf-8")) as { anthropicKey?: string };
+      if (typeof c.anthropicKey === "string" && c.anthropicKey) return c.anthropicKey;
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
+// One abort controller per active agent run, keyed by renderer frame
+// id, so a Stop from the UI cancels the right loop.
+const agentRuns = new Map<number, AbortController>();
 
 /**
  * Custom URL scheme registration. After this is called once and the
@@ -371,6 +394,48 @@ function registerIpc(): void {
       });
     },
   );
+
+  // agentRun — the LOCAL agent loop. Runs the whole tool-use loop in
+  // this main process: calls Anthropic directly, executes tools on the
+  // real machine, streams events back to the renderer. This is the
+  // Claude-Code-style local engine (no Vercel round-trip per step).
+  ipcMain.handle(
+    "veronum:agentRun",
+    async (event, args: { rootId: string; task: string; model?: string; systemExtra?: string }) => {
+      const root = grantedRoots.get(args.rootId);
+      if (!root) return { ok: false, error: "root_not_granted" };
+      const apiKey = loadAnthropicKey();
+      if (!apiKey) {
+        return { ok: false, error: "no_api_key", detail: "Set ANTHROPIC_API_KEY or add anthropicKey to config.json in the app's data folder." };
+      }
+      const frameId = event.sender.id;
+      agentRuns.get(frameId)?.abort();
+      const abort = new AbortController();
+      agentRuns.set(frameId, abort);
+      const send = (e: unknown) => { if (!event.sender.isDestroyed()) event.sender.send("veronum:agentEvent", e); };
+      try {
+        await runLocalAgent({
+          root,
+          task: args.task,
+          apiKey,
+          model: args.model || "claude-sonnet-4-6",
+          systemExtra: args.systemExtra,
+          onEvent: send,
+          signal: abort.signal,
+        });
+        return { ok: true };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : "agent_failed" };
+      } finally {
+        agentRuns.delete(frameId);
+      }
+    },
+  );
+
+  ipcMain.handle("veronum:agentCancel", (event) => {
+    agentRuns.get(event.sender.id)?.abort();
+    return { ok: true };
+  });
 
   // platform — small surface the renderer uses to swap UX based on
   // wrapper (e.g., hide the "Download desktop app" CTA we'd otherwise

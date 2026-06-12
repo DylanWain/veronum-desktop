@@ -32,6 +32,9 @@ declare global {
         command: string,
         opts?: { timeoutMs?: number },
       ): Promise<{ ok: boolean; code: number; stdout: string; stderr: string }>;
+      runAgent(args: { rootId: string; task: string; model?: string; systemExtra?: string }): Promise<{ ok: boolean; error?: string; detail?: string }>;
+      cancelAgent(): Promise<{ ok: boolean }>;
+      onAgentEvent(handler: (e: unknown) => void): () => void;
       platform(): Promise<{
         isDesktop: true;
         platform: NodeJS.Platform;

@@ -61,6 +61,25 @@ const api = {
   ): Promise<{ ok: boolean; code: number; stdout: string; stderr: string }> =>
     ipcRenderer.invoke("veronum:runCommand", rootId, command, opts),
 
+  /** Run the LOCAL agent loop in the main process (Claude-Code-style):
+   *  the whole tool loop — model call + file edits + commands — runs on
+   *  the machine, streaming events via onAgentEvent. Resolves when the
+   *  run finishes. */
+  runAgent: (args: { rootId: string; task: string; model?: string; systemExtra?: string }):
+    Promise<{ ok: boolean; error?: string; detail?: string }> =>
+    ipcRenderer.invoke("veronum:agentRun", args),
+
+  /** Cancel the active local agent run. */
+  cancelAgent: (): Promise<{ ok: boolean }> => ipcRenderer.invoke("veronum:agentCancel"),
+
+  /** Subscribe to streamed agent events (assistant text, tool results,
+   *  done, error). Returns an unsubscribe fn. */
+  onAgentEvent: (handler: (e: unknown) => void): (() => void) => {
+    const listener = (_e: unknown, ev: unknown) => handler(ev);
+    ipcRenderer.on("veronum:agentEvent", listener);
+    return () => ipcRenderer.removeListener("veronum:agentEvent", listener);
+  },
+
   /** Tells the website it's running inside Veronum Desktop, plus
    *  basic platform info for UI conditionals. */
   platform: (): Promise<{
