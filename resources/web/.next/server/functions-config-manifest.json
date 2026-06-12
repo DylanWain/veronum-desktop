@@ -1,35 +1,35 @@
 {
   "version": 1,
   "functions": {
-    "/api/bridge/tunnel-info": {},
-    "/api/claim-subscription": {},
-    "/api/checkout": {},
-    "/api/cron/stripe-meter-flush": {
-      "maxDuration": 60
-    },
-    "/api/share": {},
-    "/api/github/repos": {},
-    "/api/github/ingest": {},
-    "/api/stripe/webhook": {},
+    "/api/auto-classify": {},
     "/api/bridge/git": {},
-    "/api/v1/chat": {
-      "maxDuration": 120
-    },
-    "/api/v1/projects/[id]/changes": {},
+    "/api/bridge/tunnel-info": {},
+    "/api/checkout": {},
+    "/api/checkout/wallet": {},
+    "/api/claim-subscription": {},
+    "/api/compare": {},
+    "/api/github/repos": {},
+    "/api/stripe/webhook": {},
+    "/api/github/ingest": {},
     "/api/v1/projects/[id]/files": {},
-    "/api/v1/projects/[id]/link": {},
     "/api/v1/projects/[id]/messages": {},
     "/api/v1/projects/[id]/presence": {},
     "/api/v1/projects/join/[token]": {},
-    "/api/auto-classify": {},
-    "/api/compare": {},
+    "/api/v1/projects": {},
+    "/api/share": {},
+    "/api/v1/projects/[id]/link": {},
     "/api/v1/users/register": {},
+    "/api/cron/stripe-meter-flush": {
+      "maxDuration": 60
+    },
+    "/api/v1/projects/[id]/invite": {},
+    "/api/v1/health": {},
+    "/api/v1/chat": {
+      "maxDuration": 120
+    },
     "/api/v1/transcribe": {
       "maxDuration": 60
     },
-    "/api/v1/projects": {},
-    "/api/checkout/wallet": {},
-    "/api/v1/health": {},
-    "/api/v1/projects/[id]/invite": {}
+    "/api/v1/projects/[id]/changes": {}
   }
 }

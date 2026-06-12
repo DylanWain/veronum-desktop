@@ -126,6 +126,12 @@
       "namedRegex": "^/admin(?:/)?$"
     },
     {
+      "page": "/auth/desktop-handoff",
+      "regex": "^/auth/desktop\\-handoff(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/auth/desktop\\-handoff(?:/)?$"
+    },
+    {
       "page": "/chat",
       "regex": "^/chat(?:/)?$",
       "routeKeys": {},

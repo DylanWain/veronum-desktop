@@ -27,6 +27,7 @@
  */
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { promises as fs } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, relative, sep, normalize, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { startVeronumServer } from "./server";
@@ -80,18 +81,25 @@ app.on("open-url", (event, url) => {
 // the app's already running, macOS routes it through open-url above.
 // On Windows/Linux the OS spawns a second process and we get
 // second-instance — pull the URL out of the new argv.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-} else {
-  app.on("second-instance", (_event, argv) => {
-    const url = argv.find((a) => a.startsWith("veronum://"));
-    if (url) deliverAuthUrl(url);
-    if (mainWindow) {
-      if (mainWindow.isMinimized()) mainWindow.restore();
-      mainWindow.focus();
-    }
-  });
+//
+// Packaged builds only: in dev, electron-vite's watch restarts race
+// the dying instance for the lock — the new instance loses and
+// app.quit()s, leaving NO instance running. Deep links are a
+// packaged-app concern anyway (Launch Services targets the .app).
+if (!process.defaultApp) {
+  const gotLock = app.requestSingleInstanceLock();
+  if (!gotLock) {
+    app.quit();
+  } else {
+    app.on("second-instance", (_event, argv) => {
+      const url = argv.find((a) => a.startsWith("veronum://"));
+      if (url) deliverAuthUrl(url);
+      if (mainWindow) {
+        if (mainWindow.isMinimized()) mainWindow.restore();
+        mainWindow.focus();
+      }
+    });
+  }
 }
 
 /**
@@ -109,7 +117,69 @@ const SITE_URL_FALLBACK = "https://thetoolswebsite.com";
 // Allowlist of directory roots the user has explicitly granted access to,
 // keyed by an opaque id we hand back to the renderer. The renderer never
 // sees an absolute path — only ids it can pass back to read / walk.
+//
+// PERSISTED to userData/granted-roots.json — this is the Cursor model:
+// Cursor stores `windowsState.lastActiveWindow.folder = "file:///path"`
+// in its storage.json and re-reads files LIVE from disk on every
+// launch. We do the same: the path survives relaunches, so a rootId
+// cached in the renderer's IndexedDB stays valid forever and the
+// workspace re-walks fresh from disk instead of relying on snapshots.
 const grantedRoots = new Map<string, string>();
+
+const rootsFile = () => join(app.getPath("userData"), "granted-roots.json");
+
+function loadGrantedRoots(): void {
+  try {
+    if (!existsSync(rootsFile())) return;
+    const raw = JSON.parse(readFileSync(rootsFile(), "utf-8")) as Record<string, string>;
+    for (const [id, path] of Object.entries(raw)) {
+      if (typeof id === "string" && typeof path === "string") grantedRoots.set(id, path);
+    }
+  } catch (e) {
+    process.stderr.write(`[main] granted-roots load failed: ${e instanceof Error ? e.message : e}\n`);
+  }
+}
+
+function saveGrantedRoots(): void {
+  try {
+    writeFileSync(rootsFile(), JSON.stringify(Object.fromEntries(grantedRoots), null, 2), "utf-8");
+  } catch (e) {
+    process.stderr.write(`[main] granted-roots save failed: ${e instanceof Error ? e.message : e}\n`);
+  }
+}
+
+// Window bounds persistence — Cursor stores uiState {x, y, width,
+// height} per window in storage.json; we keep one record for the
+// single Veronum window so it reopens exactly where the user left it.
+const boundsFile = () => join(app.getPath("userData"), "window-state.json");
+
+type SavedBounds = { x: number; y: number; width: number; height: number };
+
+function loadSavedBounds(): SavedBounds | null {
+  try {
+    if (!existsSync(boundsFile())) return null;
+    const b = JSON.parse(readFileSync(boundsFile(), "utf-8")) as SavedBounds;
+    if ([b.x, b.y, b.width, b.height].every((n) => Number.isFinite(n))) return b;
+    return null;
+  } catch { return null; }
+}
+
+function persistBoundsOf(win: BrowserWindow): void {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const save = () => {
+    if (win.isDestroyed() || win.isMinimized() || win.isFullScreen()) return;
+    try {
+      writeFileSync(boundsFile(), JSON.stringify(win.getBounds()), "utf-8");
+    } catch { /* non-fatal */ }
+  };
+  const debounced = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(save, 400);
+  };
+  win.on("moved", debounced);
+  win.on("resized", debounced);
+  win.on("close", save);
+}
 
 function isInsideRoot(rootAbs: string, candidateAbs: string): boolean {
   const rel = relative(rootAbs, candidateAbs);
@@ -200,8 +270,15 @@ function registerIpc(): void {
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     const rootAbs = result.filePaths[0];
-    const rootId = randomUUID();
-    grantedRoots.set(rootId, rootAbs);
+    // Re-use the existing rootId when the same path was granted
+    // before — keeps previously-cached renderer state (IndexedDB
+    // records keyed by rootId) valid across re-picks.
+    let rootId = [...grantedRoots.entries()].find(([, p]) => p === rootAbs)?.[0];
+    if (!rootId) {
+      rootId = randomUUID();
+      grantedRoots.set(rootId, rootAbs);
+      saveGrantedRoots();
+    }
     const { files, totalBytes, dropped } = await walkRoot(rootAbs);
     return {
       rootId,
@@ -273,9 +350,11 @@ async function resolveLoadUrl(): Promise<string> {
 }
 
 async function createWindow(): Promise<void> {
+  const saved = loadSavedBounds();
   const win = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: saved?.width ?? 1440,
+    height: saved?.height ?? 900,
+    ...(saved ? { x: saved.x, y: saved.y } : {}),
     minWidth: 900,
     minHeight: 600,
     backgroundColor: "#000000",
@@ -289,6 +368,7 @@ async function createWindow(): Promise<void> {
       webSecurity: true,
     },
   });
+  persistBoundsOf(win);
 
   win.once("ready-to-show", () => {
     win.show();
@@ -317,6 +397,7 @@ async function createWindow(): Promise<void> {
 }
 
 app.whenReady().then(async () => {
+  loadGrantedRoots();
   registerIpc();
   await createWindow();
   app.on("activate", async () => {
