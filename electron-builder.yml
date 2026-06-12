@@ -1,0 +1,57 @@
+# Veronum Desktop — electron-builder config.
+#
+# Mac signing assumes you already have a Developer ID Application cert
+# in Keychain (the user confirmed they do). The notarize step uses
+# Apple's notarytool — set these env vars before `npm run dist:mac`:
+#
+#   APPLE_ID                — your Apple ID email
+#   APPLE_APP_SPECIFIC_PASSWORD — generate at appleid.apple.com → App-Specific Passwords
+#   APPLE_TEAM_ID           — 10-char team id from developer.apple.com
+#
+# `npm run dist:mac` will sign + notarize + staple. Output lands at
+# release/Veronum-${version}-mac.dmg (universal arm64+x64).
+
+appId: com.veronum.desktop
+productName: Veronum
+copyright: Copyright © 2026 Veronum
+
+directories:
+  buildResources: build
+  output: release
+
+files:
+  - "out/**/*"
+  - "package.json"
+  - "!**/*.{md,map,ts}"
+
+asar: true
+
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      arch:
+        - universal
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: true
+  # `identity: null` skips signing in CI without a cert; set it via env
+  # CSC_NAME or leave undefined to auto-detect the Developer ID cert in
+  # the user's Keychain. electron-builder picks the right one when the
+  # name is omitted.
+
+dmg:
+  title: ${productName} ${version}
+  icon: build/icon.icns
+  iconSize: 100
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+
+publish: null
