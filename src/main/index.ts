@@ -114,6 +114,16 @@ if (!process.defaultApp) {
 const SITE_URL_OVERRIDE = process.env.VERONUM_SITE_URL ?? null;
 const SITE_URL_FALLBACK = "https://thetoolswebsite.com";
 
+// Dedicated storage profile. productName is "Veronum", so Electron's
+// default userData would be ~/Library/Application Support/Veronum —
+// the SAME directory the old /Applications/Veronum.app (bridge v1)
+// uses while it runs. Two Chromium instances sharing one profile
+// fight over LevelDB locks and silently corrupt localStorage /
+// IndexedDB — i.e. chat history and workspace caches vanish. A
+// dedicated path makes this app's storage untouchable by anything
+// else. Must run before app.whenReady().
+app.setPath("userData", join(app.getPath("appData"), "Veronum Desktop"));
+
 // Allowlist of directory roots the user has explicitly granted access to,
 // keyed by an opaque id we hand back to the renderer. The renderer never
 // sees an absolute path — only ids it can pass back to read / walk.
