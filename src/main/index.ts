@@ -29,8 +29,19 @@ import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { promises as fs } from "node:fs";
 import { join, relative, sep, normalize, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { startVeronumServer } from "./server";
 
-const SITE_URL = process.env.VERONUM_SITE_URL ?? "https://thetoolswebsite.com";
+/**
+ * Where the renderer loads from. Resolution order:
+ *   1. VERONUM_SITE_URL — opt-in override, e.g. point at a local
+ *      Veronum-site dev server during iteration on UI changes.
+ *   2. The bundled Next.js standalone server we spawn at startup,
+ *      reachable at http://127.0.0.1:27500 (or the next free port).
+ *   3. If neither is available (build incomplete), fall back to the
+ *      live deploy so the wrapper at least functions.
+ */
+const SITE_URL_OVERRIDE = process.env.VERONUM_SITE_URL ?? null;
+const SITE_URL_FALLBACK = "https://thetoolswebsite.com";
 
 // Allowlist of directory roots the user has explicitly granted access to,
 // keyed by an opaque id we hand back to the renderer. The renderer never
@@ -180,7 +191,25 @@ function registerIpc(): void {
   }));
 }
 
-function createWindow(): void {
+async function resolveLoadUrl(): Promise<string> {
+  if (SITE_URL_OVERRIDE) return SITE_URL_OVERRIDE;
+  try {
+    const server = await startVeronumServer();
+    return server.url;
+  } catch (e) {
+    // The bundle may be missing in fresh-clone dev environments.
+    // Fall back to the live site so the wrapper at least loads;
+    // the user sees a working chat (without bridge) instead of a
+    // blank window.
+    process.stderr.write(
+      `[main] standalone server failed to start: ${e instanceof Error ? e.message : e}\n` +
+      `[main] falling back to ${SITE_URL_FALLBACK}\n`,
+    );
+    return SITE_URL_FALLBACK;
+  }
+}
+
+async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -209,14 +238,15 @@ function createWindow(): void {
     return { action: "deny" };
   });
 
-  void win.loadURL(SITE_URL);
+  const url = await resolveLoadUrl();
+  void win.loadURL(url);
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerIpc();
-  createWindow();
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  await createWindow();
+  app.on("activate", async () => {
+    if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
 });
 

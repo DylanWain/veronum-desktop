@@ -24,7 +24,19 @@ files:
   - "package.json"
   - "!**/*.{md,map,ts}"
 
+extraResources:
+  - from: "resources/web"
+    to: "web"
+    filter:
+      - "**/*"
+
+# Standalone Next server runs as a child process — it must be on disk
+# at runtime, not inside the ASAR archive. We extract it under
+# Contents/Resources/web/ via extraResources above so server.js can
+# load chunks and serve public/ assets normally.
 asar: true
+asarUnpack:
+  - "resources/web/**"
 
 mac:
   category: public.app-category.developer-tools
