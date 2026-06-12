@@ -33,6 +33,7 @@ declare global {
         arch: string;
         version: string;
       }>;
+      onAuthCallback(handler: (url: string) => void): () => void;
     };
   }
 }

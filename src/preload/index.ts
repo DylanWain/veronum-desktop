@@ -59,6 +59,16 @@ const api = {
     arch: string;
     version: string;
   }> => ipcRenderer.invoke("veronum:platform"),
+
+  /** Subscribe to veronum://auth deep-link callbacks. Returns an
+   *  unsubscribe function. The URL is the full veronum://auth?... so
+   *  the handler can parse query string for access_token + refresh_token
+   *  and call supabase.auth.setSession to complete sign-in in-place. */
+  onAuthCallback: (handler: (url: string) => void): (() => void) => {
+    const listener = (_e: unknown, url: string) => handler(url);
+    ipcRenderer.on("veronum:auth-callback", listener);
+    return () => ipcRenderer.removeListener("veronum:auth-callback", listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("veronumDesktop", api);

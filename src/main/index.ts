@@ -32,6 +32,69 @@ import { randomUUID } from "node:crypto";
 import { startVeronumServer } from "./server";
 
 /**
+ * Custom URL scheme registration. After this is called once and the
+ * user runs the app, macOS associates `veronum://` URLs with this
+ * binary — so the auth-handoff page at
+ * https://thetoolswebsite.com/auth/desktop-handoff can redirect to
+ * `veronum://auth?access_token=...` and macOS will reopen the app.
+ *
+ * In packaged builds this just works. In dev (electron-vite watching),
+ * the second argument has to be the absolute path to the current
+ * Electron binary so macOS knows what to launch.
+ */
+if (process.defaultApp) {
+  // dev mode — process.argv[1] is the main script path
+  if (process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient("veronum", process.execPath, [
+      join(process.cwd(), process.argv[1] ?? ""),
+    ]);
+  }
+} else {
+  app.setAsDefaultProtocolClient("veronum");
+}
+
+// macOS delivers protocol URLs via open-url (sometimes before any
+// window exists). We buffer the URL and re-emit once the renderer is
+// ready. Linux/Windows use second-instance (URL is in argv).
+let pendingAuthUrl: string | null = null;
+let mainWindow: BrowserWindow | null = null;
+
+function deliverAuthUrl(url: string) {
+  // veronum://auth?access_token=...&refresh_token=...
+  if (!url.startsWith("veronum://auth")) return;
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("veronum:auth-callback", url);
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+  } else {
+    pendingAuthUrl = url;
+  }
+}
+
+app.on("open-url", (event, url) => {
+  event.preventDefault();
+  deliverAuthUrl(url);
+});
+
+// Single-instance lock: when the user clicks a veronum:// link and
+// the app's already running, macOS routes it through open-url above.
+// On Windows/Linux the OS spawns a second process and we get
+// second-instance — pull the URL out of the new argv.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on("second-instance", (_event, argv) => {
+    const url = argv.find((a) => a.startsWith("veronum://"));
+    if (url) deliverAuthUrl(url);
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  });
+}
+
+/**
  * Where the renderer loads from. Resolution order:
  *   1. VERONUM_SITE_URL — opt-in override, e.g. point at a local
  *      Veronum-site dev server during iteration on UI changes.
@@ -227,7 +290,15 @@ async function createWindow(): Promise<void> {
     },
   });
 
-  win.once("ready-to-show", () => win.show());
+  win.once("ready-to-show", () => {
+    win.show();
+    // If the user opened a veronum:// link before the window existed
+    // (cold-launch from clicking the email), drain it now.
+    if (pendingAuthUrl) {
+      win.webContents.send("veronum:auth-callback", pendingAuthUrl);
+      pendingAuthUrl = null;
+    }
+  });
 
   // External links always open in the system browser — never a popup
   // Electron window. Keeps the desktop app a single, focused surface.
@@ -237,6 +308,9 @@ async function createWindow(): Promise<void> {
     }
     return { action: "deny" };
   });
+
+  mainWindow = win;
+  win.on("closed", () => { mainWindow = null; });
 
   const url = await resolveLoadUrl();
   void win.loadURL(url);
