@@ -67,20 +67,46 @@ try {
   fail("next build failed — see the output above");
 }
 
-const standalone = path.join(SITE_ROOT, ".next/standalone");
-const staticDir  = path.join(SITE_ROOT, ".next/static");
-const publicDir  = path.join(SITE_ROOT, "public");
+const standaloneBase = path.join(SITE_ROOT, ".next/standalone");
+const staticDir      = path.join(SITE_ROOT, ".next/static");
+const publicDir      = path.join(SITE_ROOT, "public");
 
-if (!fs.existsSync(standalone)) {
+if (!fs.existsSync(standaloneBase)) {
   fail("`.next/standalone` missing — is `output: 'standalone'` set in next.config.ts?");
 }
+
+// When outputFileTracingRoot is set, Next nests the standalone output
+// under .next/standalone/<projectRelPath>/. Find the actual server.js
+// rather than assuming a fixed layout — supports both flat output
+// (no tracing root) and nested output (tracing root pinned).
+function findServerRoot(base) {
+  if (fs.existsSync(path.join(base, "server.js"))) return base;
+  for (const entry of fs.readdirSync(base, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const nested = path.join(base, entry.name);
+    if (fs.existsSync(path.join(nested, "server.js"))) return nested;
+    // one level deeper, just in case
+    for (const inner of fs.readdirSync(nested, { withFileTypes: true })) {
+      if (!inner.isDirectory()) continue;
+      const deeper = path.join(nested, inner.name);
+      if (fs.existsSync(path.join(deeper, "server.js"))) return deeper;
+    }
+  }
+  return null;
+}
+
+const serverRoot = findServerRoot(standaloneBase);
+if (!serverRoot) {
+  fail("`.next/standalone` exists but no server.js found inside. The build is incomplete.");
+}
+log(`found standalone at ${serverRoot}`);
 
 log(`clearing ${OUT_DIR} …`);
 rmrf(OUT_DIR);
 fs.mkdirSync(OUT_DIR, { recursive: true });
 
-log("copying standalone/ …");
-copyDir(standalone, OUT_DIR);
+log("copying standalone/ → web/ …");
+copyDir(serverRoot, OUT_DIR);
 
 if (fs.existsSync(staticDir)) {
   log("copying .next/static/ → web/.next/static/ …");

@@ -104,6 +104,15 @@ export async function startVeronumServer(): Promise<ServerHandle> {
   const serverPath = resolveServerPath();
   const port = await pickPort();
 
+  // The Veronum-site renders an empty state at SSR if no model
+  // providers are configured (it checks process.env.OPENAI_API_KEY
+  // etc. on the server). In desktop mode the actual model calls
+  // forward to the live deploy via DESKTOP_REMOTE_API_URL rewrites,
+  // so the local server never USES these values — but it has to
+  // SEE them to render the page. We pass opaque placeholder strings
+  // that satisfy providerAvailable() without exposing real keys.
+  const REMOTE_PLACEHOLDER = "__veronum_desktop_remote__";
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(port),
@@ -111,6 +120,12 @@ export async function startVeronumServer(): Promise<ServerHandle> {
     NODE_ENV: "production",
     NEXT_TELEMETRY_DISABLED: "1",
     DESKTOP_REMOTE_API_URL: process.env.VERONUM_REMOTE_API_URL ?? REMOTE_API_DEFAULT,
+    OPENAI_API_KEY: REMOTE_PLACEHOLDER,
+    ANTHROPIC_API_KEY: REMOTE_PLACEHOLDER,
+    PERPLEXITY_API_KEY: REMOTE_PLACEHOLDER,
+    GEMINI_API_KEY: REMOTE_PLACEHOLDER,
+    XAI_API_KEY: REMOTE_PLACEHOLDER,
+    DEEPSEEK_API_KEY: REMOTE_PLACEHOLDER,
     // ELECTRON_RUN_AS_NODE makes Electron's binary behave like vanilla
     // Node — no GUI, no Chromium, no Electron APIs. That's how we run
     // Next's standalone server.js from inside the .app without

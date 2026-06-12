@@ -1,0 +1,1 @@
+self.__NEXT_FONT_MANIFEST='{"pages":{},"app":{"/Users/dylanwain/Veronum-site/app/layout":["static/media/e4af272ccee01ff0-s.p.woff2","static/media/558ca1a6aa3cb55e-s.p.woff2","static/media/4b9bb515ce6d026f-s.p.woff2","static/media/5611c55482296524-s.p.woff2"]},"appUsingSizeAdjust":true,"pagesUsingSizeAdjust":false}';

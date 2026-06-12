@@ -1,0 +1,16 @@
+<svg viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg" xml:lang="en">
+  <!-- Anthropic-style warm cream squircle background.
+       #f0eee6 matches the iconic Claude beige used as the chat surface.
+       rx/ry=225 (~22% of width) approximates the macOS Big Sur+ squircle. -->
+  <rect width="1024" height="1024" rx="225" ry="225" fill="#f0eee6"/>
+
+  <!-- Serif V in brand orange. Apple's New York is the closest system
+       analog to Anthropic's proprietary brand serif (Tiempos-family).
+       Fallback chain ensures graceful degradation on other systems. -->
+  <text x="512" y="780"
+        text-anchor="middle"
+        font-family="'.New York', 'New York', 'Tiempos Headline', Charter, Baskerville, Georgia, 'Times New Roman', serif"
+        font-size="880"
+        font-weight="500"
+        fill="#cc785c">V</text>
+</svg>
