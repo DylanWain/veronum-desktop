@@ -36,6 +36,7 @@ import { runLocalAgent } from "./agent";
 import { installContextMenu } from "./context-menu";
 import { killAllTasks } from "./tasks";
 import { initAutoUpdate } from "./autoUpdate";
+import { registerSessionReaders } from "./sessionReaders";
 
 /** The model key for the LOCAL agent loop. Resolution order:
  *  1. ANTHROPIC_API_KEY env (dev override)
@@ -535,6 +536,9 @@ async function createWindow(): Promise<void> {
 app.whenReady().then(async () => {
   loadGrantedRoots();
   registerIpc();
+  // Read-only IPC for local AI-coding session transcripts (Claude Code,
+  // Cursor, Codex) so the website can surface them inside Veronum.
+  registerSessionReaders();
   await createWindow();
   // Background auto-update: checks the GitHub Releases feed on launch +
   // every 6h, downloads newer signed builds, and offers a restart. Self-

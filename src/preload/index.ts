@@ -15,6 +15,33 @@
  */
 import { contextBridge, ipcRenderer } from "electron";
 
+/** Shapes returned by the read-only session readers (Claude Code,
+ *  Cursor, Codex). Mirror src/main/sessionTypes.ts. */
+interface SessionProject {
+  id: string;
+  name: string;
+  fullPath: string;
+  sessionCount: number;
+  lastMtime: number;
+}
+interface SessionSummary {
+  id: string;
+  title: string;
+  size: number;
+  mtime: number;
+  model: string | null;
+}
+interface SessionMessage {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  images?: { media_type: string; data: string }[];
+  timestamp?: string | null;
+}
+type SessionResult =
+  | { ok: true; title: string; messages: SessionMessage[]; freshSession?: boolean }
+  | { ok: false; error: string };
+
 const api = {
   /** Opens the native OS folder picker, walks the chosen tree, and
    *  returns a granted rootId + filtered files. `rootId` is opaque
@@ -78,6 +105,63 @@ const api = {
     const listener = (_e: unknown, ev: unknown) => handler(ev);
     ipcRenderer.on("veronum:agentEvent", listener);
     return () => ipcRenderer.removeListener("veronum:agentEvent", listener);
+  },
+
+  /** Read-only access to local AI-coding session transcripts. The
+   *  website lists projects/sessions and renders conversations from
+   *  these — no popup, read live from disk. All handlers return a
+   *  `{ ok, ... }` envelope and never throw. */
+  claudeCode: {
+    /** List Claude Code projects (one per cwd), newest-active first. */
+    listProjects: (): Promise<
+      { ok: true; projects: SessionProject[] } | { ok: false; error: string }
+    > => ipcRenderer.invoke("claudeCode:listProjects"),
+    /** List sessions within a project cwd, newest-first. */
+    listSessions: (
+      projectId: string,
+    ): Promise<{ ok: true; sessions: SessionSummary[] } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("claudeCode:listSessions", { projectId }),
+    /** Read one session's full conversation. */
+    getSession: (projectId: string, sessionId: string): Promise<SessionResult> =>
+      ipcRenderer.invoke("claudeCode:getSession", { projectId, sessionId }),
+  },
+
+  /** Cursor `cursor-agent` CLI session transcripts (read-only). */
+  cursor: {
+    /** Whether Cursor's data dir exists on this machine. */
+    available: (): Promise<
+      { ok: true; available: boolean } | { ok: false; error: string }
+    > => ipcRenderer.invoke("cursor:available"),
+    /** List Cursor IDE projects, newest-first. */
+    listProjects: (): Promise<
+      { ok: true; projects: SessionProject[] } | { ok: false; error: string }
+    > => ipcRenderer.invoke("cursor:listProjects"),
+    /** List agent-transcript sessions for a workspace cwd. */
+    listSessions: (
+      cwd: string,
+    ): Promise<{ ok: true; sessions: SessionSummary[] } | { ok: false; error: string }> =>
+      ipcRenderer.invoke("cursor:listSessions", { cwd }),
+    /** Read one Cursor transcript's full conversation. */
+    getSession: (cwd: string, sessionId: string): Promise<SessionResult> =>
+      ipcRenderer.invoke("cursor:getSession", { cwd, sessionId }),
+  },
+
+  /** Codex (OpenAI) global session transcripts (read-only). No project
+   *  concept — sessions are global. Requires `features.hooks = true` in
+   *  ~/.codex/config.toml; otherwise available/listSessions report the
+   *  "codex hooks not enabled" reason. */
+  codex: {
+    /** Whether Codex is installed AND hooks are enabled. */
+    available: (): Promise<
+      { ok: true; available: boolean; error?: string } | { ok: false; error: string }
+    > => ipcRenderer.invoke("codex:available"),
+    /** List all Codex sessions globally, newest-first. */
+    listSessions: (): Promise<
+      { ok: true; sessions: SessionSummary[] } | { ok: false; error: string }
+    > => ipcRenderer.invoke("codex:listSessions"),
+    /** Read one Codex session's full conversation by uuid. */
+    getSession: (sessionId: string): Promise<SessionResult> =>
+      ipcRenderer.invoke("codex:getSession", { sessionId }),
   },
 
   /** Tells the website it's running inside Veronum Desktop, plus
