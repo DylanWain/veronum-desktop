@@ -25,7 +25,7 @@
  * read the user's whole disk. Authorized paths live in a Set keyed by
  * directory id, populated on pickFolder() and queryable thereafter.
  */
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell, session } from "electron";
 import { promises as fs } from "node:fs";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, relative, sep, normalize, dirname } from "node:path";
@@ -33,6 +33,9 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { startVeronumServer } from "./server";
 import { runLocalAgent } from "./agent";
+import { installContextMenu } from "./context-menu";
+import { killAllTasks } from "./tasks";
+import { initAutoUpdate } from "./autoUpdate";
 
 /** The model key for the LOCAL agent loop. Resolution order:
  *  1. ANTHROPIC_API_KEY env (dev override)
@@ -506,8 +509,24 @@ async function createWindow(): Promise<void> {
     return { action: "deny" };
   });
 
+  // Right-click → Copy / Paste / Cut / Select All in the composer and chat.
+  installContextMenu(win);
+
   mainWindow = win;
   win.on("closed", () => { mainWindow = null; });
+
+  // Clear the HTTP + service-worker/cache-storage caches on every
+  // launch so the latest deployed site code ALWAYS loads — a normal
+  // reload (even Cmd+Shift+R) couldn't beat Next.js's cached chunks,
+  // which is why deployed fixes weren't showing up. We deliberately do
+  // NOT clear localStorage or IndexedDB, so chat sessions, the project
+  // file cache, and the user's login all survive.
+  try {
+    await session.defaultSession.clearCache();
+    await session.defaultSession.clearStorageData({ storages: ["serviceworkers", "cachestorage", "shadercache"] });
+  } catch (e) {
+    process.stderr.write(`[main] cache clear failed: ${e instanceof Error ? e.message : e}\n`);
+  }
 
   const url = await resolveLoadUrl();
   void win.loadURL(url);
@@ -517,6 +536,10 @@ app.whenReady().then(async () => {
   loadGrantedRoots();
   registerIpc();
   await createWindow();
+  // Background auto-update: checks the GitHub Releases feed on launch +
+  // every 6h, downloads newer signed builds, and offers a restart. Self-
+  // disables in dev. Runs after the window is up so it never delays paint.
+  initAutoUpdate();
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
   });
@@ -525,3 +548,7 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+
+// Kill any background tasks (dev servers, watchers) so they don't leak
+// ports / orphan processes after the app exits.
+app.on("before-quit", () => killAllTasks());

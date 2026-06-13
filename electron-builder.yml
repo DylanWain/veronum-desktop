@@ -41,7 +41,14 @@ asarUnpack:
 mac:
   category: public.app-category.developer-tools
   target:
+    # dmg = what users download the first time.
+    # zip = what electron-updater downloads to apply updates in place.
+    #       macOS auto-update CANNOT work from a dmg alone — the zip is
+    #       required, and electron-builder generates latest-mac.yml from it.
     - target: dmg
+      arch:
+        - universal
+    - target: zip
       arch:
         - universal
   hardenedRuntime: true
@@ -66,4 +73,14 @@ dmg:
       type: link
       path: /Applications
 
-publish: null
+# Update feed. electron-builder uploads the dmg, zip, blockmap and a
+# generated latest-mac.yml to GitHub Releases on `--publish`, and the
+# packaged app reads this same config (baked in as app-update.yml) to know
+# where to check. owner/repo must be a repo you can push releases to and
+# must be DISTINCT from veronum-bridge (different appId — sharing a feed
+# would cross the two apps' update streams).
+publish:
+  provider: github
+  owner: DylanWain
+  repo: veronum-desktop
+  releaseType: release
