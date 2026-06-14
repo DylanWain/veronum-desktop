@@ -639,4 +639,10 @@ export async function getSession(
 
 // Re-exported for internal reuse / testing; intentionally part of the
 // surface so the title-sniff path stays available to callers.
-export { pickSessionTitle, readFirstSessionLines };
+//
+// findSessionJsonl is exported so the continuation sender
+// (claudeCodeSend.ts) reuses the SAME lossy-dir → cwd → <uuid>.jsonl
+// resolution the reader uses. We deliberately do NOT duplicate that
+// path logic in a second module.
+export { pickSessionTitle, readFirstSessionLines, findSessionJsonl };
+export type { LocatedJsonl };

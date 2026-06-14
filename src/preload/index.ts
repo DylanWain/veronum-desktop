@@ -42,6 +42,59 @@ type SessionResult =
   | { ok: true; title: string; messages: SessionMessage[]; freshSession?: boolean }
   | { ok: false; error: string };
 
+/** Raw payload the main process sends over "claudeCode:turn": a streamed
+ *  stream-json line (`chunk`) while running, then a terminal `done`. */
+interface ClaudeTurnPayload {
+  sessionId: string;
+  chunk?: unknown;
+  done?: boolean;
+  exitCode?: number | null;
+  signal?: string | null;
+  stderrTail?: string;
+  error?: string;
+}
+
+/** Pull incremental assistant text out of one raw stream-json line.
+ *  Claude Code emits `{ type:"assistant", message:{ content:[{type:"text",
+ *  text }, ...] } }`; we concatenate the text blocks. Returns "" for
+ *  tool_use / system / result lines (nothing renderable). */
+function extractTurnText(chunk: unknown): string {
+  if (!chunk || typeof chunk !== "object") return "";
+  const c = chunk as { type?: string; message?: { content?: unknown } };
+  if (c.type !== "assistant" || !c.message) return "";
+  const content = c.message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  const parts: string[] = [];
+  for (const blk of content) {
+    if (blk && typeof blk === "object") {
+      const b = blk as { type?: string; text?: unknown };
+      if (b.type === "text" && typeof b.text === "string") parts.push(b.text);
+    }
+  }
+  return parts.join("");
+}
+
+/** Map the raw IPC payload to the normalized onChunk shape the renderer
+ *  consumes: { sessionId, delta?, text?, done?, error? }. */
+function normalizeTurn(payload: ClaudeTurnPayload): {
+  sessionId: string;
+  delta?: string;
+  text?: string;
+  done?: boolean;
+  error?: string;
+} {
+  if (payload.done) {
+    return { sessionId: payload.sessionId, done: true, error: payload.error };
+  }
+  const text = extractTurnText(payload.chunk);
+  // `text` and `delta` carry the same incremental assistant text — `delta`
+  // for consumers appending token-by-token, `text` for those replacing.
+  return text
+    ? { sessionId: payload.sessionId, delta: text, text }
+    : { sessionId: payload.sessionId };
+}
+
 const api = {
   /** Opens the native OS folder picker, walks the chosen tree, and
    *  returns a granted rootId + filtered files. `rootId` is opaque
@@ -124,6 +177,64 @@ const api = {
     /** Read one session's full conversation. */
     getSession: (projectId: string, sessionId: string): Promise<SessionResult> =>
       ipcRenderer.invoke("claudeCode:getSession", { projectId, sessionId }),
+
+    /**
+     * Continue a Claude Code session FOR FREE via the user's own local
+     * `claude` CLI (their subscription — no API key, no metered spend).
+     *
+     * Spawns `claude --resume <sessionId> -p <prompt> --output-format
+     * stream-json --verbose --model opus --fallback-model sonnet` in the
+     * project's cwd (handled in the main process). Streams stream-json
+     * events back via onChunk as Claude works, then a final { done:true }.
+     * Resolves when the child exits — at which point the new turns are
+     * already on disk in the JSONL, so the caller should re-fetch via
+     * getSession() to render the canonical state.
+     *
+     * onChunk receives a normalized event:
+     *   { sessionId, delta?, text?, done?, error? }
+     * (delta/text carry incremental assistant text extracted from the raw
+     *  stream-json line; done marks the terminal event; error is set on a
+     *  spawn/exit failure.)
+     *
+     * The "claudeCode:turn" listener auto-removes itself when the promise
+     * settles, so there's no separate unsubscribe to manage. If the React
+     * component unmounts mid-stream, call cancelSend(sessionId).
+     */
+    sendInSession: (
+      args: { projectId: string; sessionId: string; prompt: string },
+      onChunk: (c: {
+        sessionId: string;
+        delta?: string;
+        text?: string;
+        done?: boolean;
+        error?: string;
+      }) => void,
+    ): Promise<{ ok: boolean; error?: string }> => {
+      const channel = "claudeCode:turn";
+      const listener = (_event: unknown, payload: ClaudeTurnPayload): void => {
+        if (!payload || payload.sessionId !== args.sessionId) return;
+        try {
+          if (typeof onChunk === "function") onChunk(normalizeTurn(payload));
+        } catch {
+          /* swallow renderer errors so we don't break the stream */
+        }
+      };
+      ipcRenderer.on(channel, listener);
+      const promise = ipcRenderer.invoke("claudeCode:sendInSession", {
+        projectId: args.projectId,
+        sessionId: args.sessionId,
+        prompt: args.prompt,
+      }) as Promise<{ ok: boolean; error?: string }>;
+      // Auto-cleanup once the send settles (success OR failure).
+      promise.finally(() => {
+        ipcRenderer.removeListener(channel, listener);
+      });
+      return promise;
+    },
+
+    /** SIGTERM the in-flight `claude --resume` child for this session. */
+    cancelSend: (sessionId: string): Promise<{ ok: boolean }> =>
+      ipcRenderer.invoke("claudeCode:cancelSend", { sessionId }) as Promise<{ ok: boolean }>,
   },
 
   /** Cursor `cursor-agent` CLI session transcripts (read-only). */

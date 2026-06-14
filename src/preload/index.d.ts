@@ -64,6 +64,20 @@ declare global {
         listProjects(): Promise<{ ok: true; projects: VdSessionProject[] } | { ok: false; error: string }>;
         listSessions(projectId: string): Promise<{ ok: true; sessions: VdSessionSummary[] } | { ok: false; error: string }>;
         getSession(projectId: string, sessionId: string): Promise<VdSessionResult>;
+        /** Continue a session via the user's local `claude` CLI (free path).
+         *  Streams normalized chunks to onChunk; resolves on child exit. */
+        sendInSession(
+          args: { projectId: string; sessionId: string; prompt: string },
+          onChunk: (c: {
+            sessionId: string;
+            delta?: string;
+            text?: string;
+            done?: boolean;
+            error?: string;
+          }) => void,
+        ): Promise<{ ok: boolean; error?: string }>;
+        /** SIGTERM the in-flight `claude --resume` child for this session. */
+        cancelSend(sessionId: string): Promise<{ ok: boolean }>;
       };
       cursor: {
         available(): Promise<{ ok: true; available: boolean } | { ok: false; error: string }>;

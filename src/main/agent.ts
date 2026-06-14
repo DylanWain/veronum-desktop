@@ -19,6 +19,8 @@
 import { promises as fs } from "node:fs";
 import { join, dirname, sep } from "node:path";
 import { execFile } from "node:child_process";
+import { startBackgroundTask, readTaskOutput, stopTask } from "./tasks";
+import { buildProjectBrief } from "./projectBrief";
 
 const SKIP_DIRS = /(^|\/)(node_modules|\.next|\.turbo|dist|build|out|\.git|vendor|target|\.cache|\.vscode|\.idea|coverage|__pycache__|\.pytest_cache|\.venv)(\/|$)/;
 const ALLOWED_EXT = new Set([
@@ -34,23 +36,43 @@ export type AgentEvent =
   | { type: "done"; summary: string; steps: number }
   | { type: "error"; message: string };
 
-const SYSTEM_PROMPT = `You are Veronum's coding agent, running locally on the user's machine with direct file and shell access. You edit the user's real project files and run real commands.
+const SYSTEM_PROMPT = `You are Veronum's coding agent, running locally on the user's machine with direct file and shell access. You edit the user's real project files and run real commands. You are an interactive agent for software-engineering tasks: fixing bugs, adding features, refactoring, and explaining code.
 
-Rules:
-- Before editing a file, read_file it so old_string matches exactly.
-- Make the smallest change that satisfies the request; match surrounding style.
-- Prefer edit_file for existing files; write_file only for new files.
-- You CAN run commands (npm, git, build, test) with bash. Prefer acting over asking — only ask if a request is genuinely ambiguous about WHICH file or WHAT outcome. "Run the tests", "commit and push", "what changed" are NOT ambiguous — just do them.
-- When done, stop calling tools and give a 1-2 sentence summary of what you did.
-- If a tool errors, read the error and adjust — don't repeat the same call.`;
+# Doing tasks
+- When an instruction is unclear or generic, read it in software-engineering context and in light of the current project. If asked to rename "methodName" to snake_case, find the method in the code and change it — don't just reply "method_name".
+- Never propose or make changes to code you haven't read. Read a file before editing it, so old_string matches exactly and you understand the surrounding code.
+- Make the smallest change that satisfies the request. Don't add features, refactors, or abstractions beyond what was asked — a bug fix doesn't need surrounding cleanup, three similar lines beat a premature abstraction, and there are no half-finished implementations.
+- Default to writing NO comments. Add one only when the WHY is non-obvious (a hidden constraint, a workaround). Don't explain WHAT the code does — good names do that. Match the surrounding code's style.
+- Don't add error handling or validation for cases that can't happen; validate only at real boundaries (user input, external APIs).
+- Prefer editing an existing file to creating a new one. Don't create files unless necessary, and never create docs/README unless asked.
+- If an approach fails, diagnose why before switching — read the error, check your assumptions, try a focused fix. Don't blindly retry the same call.
+- Never introduce security holes (injection, XSS, SQL injection, OWASP top 10). If you wrote insecure code, fix it immediately.
+
+# Using your tools
+- Prefer the dedicated tools over bash: read_file (not cat), edit_file (not sed), write_file (not echo >), glob (not find/ls), grep (not grep/rg). Reserve bash for actually running things — npm, git, builds, tests, opening apps.
+- You CAN run commands. Prefer acting over asking — only ask if a request is genuinely ambiguous about WHICH file or WHAT outcome. "Run the tests", "commit and push", "what changed" are NOT ambiguous — just do them.
+- You can call several tools in one turn. Make independent tool calls together; only sequence calls when one depends on another's result.
+- For anything long-running that does NOT exit on its own — a dev server, a file watcher, "npm run dev", "next dev" — use bash_background, NOT bash. It returns a task_id and keeps running across your steps; a plain bash command is killed the moment it returns, so a server started with bash dies and "open localhost" fails. Never add "&". Confirm it started by reading read_output(task_id), then keep working; stop it with stop_task when you're done.
+
+# Verifying your work
+- Before you report a task complete, verify it actually works: run the test, the build, or the command and read the output. "Done" means you confirmed it — not that you think it should work.
+- If you can't verify something, say so plainly instead of claiming success. Never say you ran, built, installed, or fixed something you didn't actually confirm — that breaks the user's trust.
+
+# Tone and style
+- Be concise and direct. Lead with the answer or the action, not the reasoning. Skip preamble and filler, and don't restate the request — just do it. If you can say it in one sentence, don't use three.
+- When you finish, stop calling tools and give a 1-2 sentence summary of what you actually did and changed.
+- Reference code as file_path:line_number so the user can jump to it. Only use emojis if the user asks.`;
 
 const TOOLS = [
-  { name: "read_file", description: "Read a file's full contents.", input_schema: { type: "object", properties: { path: { type: "string", description: "Workspace-relative path" } }, required: ["path"] } },
-  { name: "edit_file", description: "Replace an exact unique substring in a file.", input_schema: { type: "object", properties: { path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } }, required: ["path", "old_string", "new_string"] } },
-  { name: "write_file", description: "Create or overwrite a file with content.", input_schema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
-  { name: "grep", description: "Search the workspace for a regex; returns path:line matches.", input_schema: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] } },
-  { name: "glob", description: "List files matching a glob (e.g. **/*.ts).", input_schema: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] } },
-  { name: "bash", description: "Run a shell command in the project root (npm, git, tests, builds).", input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
+  { name: "read_file", description: "Read a file's full contents from the workspace. Always read a file before you edit it, so your edit_file old_string matches byte-for-byte and you understand the surrounding code.", input_schema: { type: "object", properties: { path: { type: "string", description: "Workspace-relative path" } }, required: ["path"] } },
+  { name: "edit_file", description: "Replace an exact, unique substring in an existing file. You must read_file it first; old_string must match exactly including whitespace/indentation and appear EXACTLY once — if it isn't unique, include more surrounding context. Fails if the file doesn't exist (use write_file for new files) or old_string isn't found or isn't unique.", input_schema: { type: "object", properties: { path: { type: "string" }, old_string: { type: "string" }, new_string: { type: "string" } }, required: ["path", "old_string", "new_string"] } },
+  { name: "write_file", description: "Create a new file, or completely overwrite an existing one, with the given content. Prefer edit_file for changing part of an existing file — only use write_file for brand-new files or full rewrites. Never create documentation/README files unless asked.", input_schema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } }, required: ["path", "content"] } },
+  { name: "grep", description: "Search file contents across the workspace with a regular expression; returns matching lines as path:line: text. Use this instead of running grep/rg in bash. Supports full regex syntax.", input_schema: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] } },
+  { name: "glob", description: "Find files by name with a glob pattern, e.g. **/*.ts or src/**/*.tsx; returns matching paths. Use this instead of find/ls in bash.", input_schema: { type: "object", properties: { pattern: { type: "string" } }, required: ["pattern"] } },
+  { name: "bash", description: "Run a shell command in the project root. Use it for things only a shell can do: npm/pnpm, git (add/commit/push), running tests and builds, opening apps. Do NOT use it to read, search, or edit files — use read_file/grep/glob/edit_file/write_file for those. Chain dependent commands with &&; quote paths that contain spaces. For a process that does NOT exit on its own (a dev server, a watcher), use bash_background instead — bash is killed when it returns.", input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
+  { name: "bash_background", description: "Start a long-running command that must keep running across steps — a dev server, file watcher, or watch-mode build (e.g. 'npm run dev', 'next dev'). Returns a task_id immediately while the process keeps running in the background. Do NOT use '&'. Read its output later with read_output, and stop it with stop_task. Use this instead of bash for anything that does not exit on its own.", input_schema: { type: "object", properties: { command: { type: "string" } }, required: ["command"] } },
+  { name: "read_output", description: "Read the latest output (tail) of a background task started with bash_background, by its task_id. Returns whether it is still running or has exited, plus its logs — use it to confirm a dev server came up or to read a watcher's errors.", input_schema: { type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"] } },
+  { name: "stop_task", description: "Stop a running background task (e.g. a dev server) by its task_id.", input_schema: { type: "object", properties: { task_id: { type: "string" } }, required: ["task_id"] } },
 ];
 
 function inside(root: string, rel: string): string | null {
@@ -144,6 +166,19 @@ async function execTool(root: string, name: string, input: Record<string, unknow
       const r = await runBash(root, s("command"));
       return { ok: r.ok, content: r.out };
     }
+    if (name === "bash_background") {
+      const r = await startBackgroundTask(root, s("command"));
+      return { ok: true, content: `Started background task ${r.taskId} (still running). Read its output with read_output("${r.taskId}") and stop it with stop_task("${r.taskId}"). It keeps running across your next steps.` };
+    }
+    if (name === "read_output") {
+      const r = await readTaskOutput(s("task_id"));
+      if (!r.ok) return { ok: false, content: r.error ?? "no such task" };
+      return { ok: true, content: `[${r.status}${r.exitCode != null ? ` exit ${r.exitCode}` : ""}]\n${r.output ?? ""}` };
+    }
+    if (name === "stop_task") {
+      const r = stopTask(s("task_id"));
+      return { ok: r.ok, content: r.ok ? `Stopped ${s("task_id")}.` : (r.error ?? "no such task") };
+    }
     return { ok: false, content: `Unknown tool: ${name}` };
   } catch (e) {
     return { ok: false, content: `Tool ${name} threw: ${e instanceof Error ? e.message : String(e)}` };
@@ -164,7 +199,11 @@ export async function runLocalAgent(opts: {
 }): Promise<void> {
   const { root, task, apiKey, model, onEvent } = opts;
   const maxSteps = opts.maxSteps ?? 30;
-  const system = opts.systemExtra ? `${SYSTEM_PROMPT}\n\n# Project conventions\n${opts.systemExtra}` : SYSTEM_PROMPT;
+  // Inject a brief of the actual project (file tree + git + notes) so the
+  // agent arrives already understanding the repo instead of re-exploring it.
+  const brief = await buildProjectBrief(root);
+  const extra = [opts.systemExtra, brief].filter(Boolean).join("\n\n");
+  const system = extra ? `${SYSTEM_PROMPT}\n\n# Project conventions\n${extra}` : SYSTEM_PROMPT;
   // Anthropic conversation. content blocks accumulate per turn.
   const messages: { role: "user" | "assistant"; content: unknown }[] = [
     { role: "user", content: task },
@@ -178,7 +217,7 @@ export async function runLocalAgent(opts: {
       resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-        body: JSON.stringify({ model, max_tokens: 8000, system, messages, tools: TOOLS }),
+        body: JSON.stringify({ model, max_tokens: 16000, system, messages, tools: TOOLS }),
         signal: opts.signal,
       });
     } catch (e) {

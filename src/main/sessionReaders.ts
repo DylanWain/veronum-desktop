@@ -23,6 +23,7 @@
  */
 import { ipcMain } from "electron";
 import * as claudeCode from "./claudeCodeReader";
+import * as claudeSend from "./claudeCodeSend";
 import * as cursor from "./cursorReader";
 import * as codex from "./codexReader";
 
@@ -55,6 +56,37 @@ export function registerSessionReaders(): void {
       try {
         const parsed = await claudeCode.getSession(args?.projectId, args?.sessionId);
         return { ok: true, ...parsed };
+      } catch (e) {
+        return { ok: false, error: errMsg(e) };
+      }
+    },
+  );
+
+  // Continue a Claude Code session via the user's local `claude` CLI (the
+  // "free" path). Streams every stream-json line to the renderer over the
+  // "claudeCode:turn" channel, then a final { done: true }. Resolves with
+  // an { ok, ... } envelope when the child exits. Never throws.
+  ipcMain.handle(
+    "claudeCode:sendInSession",
+    async (e, args: { projectId: string; sessionId: string; prompt: string }) => {
+      try {
+        const sender = e.sender;
+        return await claudeSend.sendInSession(args, (payload) => {
+          // Drop chunks if the renderer went away mid-stream; the child is
+          // still SIGTERM-able via claudeCode:cancelSend.
+          if (!sender.isDestroyed()) sender.send("claudeCode:turn", payload);
+        });
+      } catch (err) {
+        return { ok: false, error: errMsg(err) };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "claudeCode:cancelSend",
+    (_e, args: { sessionId: string }) => {
+      try {
+        return claudeSend.cancelSend(args?.sessionId);
       } catch (e) {
         return { ok: false, error: errMsg(e) };
       }
