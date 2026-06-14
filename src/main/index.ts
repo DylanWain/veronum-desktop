@@ -31,7 +31,6 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join, relative, sep, normalize, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { startVeronumServer } from "./server";
 import { runLocalAgent } from "./agent";
 import { installContextMenu } from "./context-menu";
 import { killAllTasks } from "./tasks";
@@ -454,21 +453,10 @@ function registerIpc(): void {
 }
 
 async function resolveLoadUrl(): Promise<string> {
-  if (SITE_URL_OVERRIDE) return SITE_URL_OVERRIDE;
-  try {
-    const server = await startVeronumServer();
-    return server.url;
-  } catch (e) {
-    // The bundle may be missing in fresh-clone dev environments.
-    // Fall back to the live site so the wrapper at least loads;
-    // the user sees a working chat (without bridge) instead of a
-    // blank window.
-    process.stderr.write(
-      `[main] standalone server failed to start: ${e instanceof Error ? e.message : e}\n` +
-      `[main] falling back to ${SITE_URL_FALLBACK}\n`,
-    );
-    return SITE_URL_FALLBACK;
-  }
+  // Load the LIVE site — identical to the dev app, always current
+  // (compare, voice, linked sessions, every feature). VERONUM_SITE_URL
+  // can point at a local Veronum-site dev server during UI iteration.
+  return SITE_URL_OVERRIDE ?? SITE_URL_FALLBACK;
 }
 
 async function createWindow(): Promise<void> {

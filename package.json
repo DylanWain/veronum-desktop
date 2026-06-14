@@ -12,9 +12,9 @@
     "build": "node scripts/build-web.cjs && electron-vite build",
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:mac:dev": "npm run build && electron-builder --mac --publish never",
-    "release:mac": "npm run build && electron-builder --mac --publish always",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:mac:dev": "electron-vite build && electron-builder --mac --publish never",
+    "release:mac": "electron-vite build && electron-builder --mac --publish always",
     "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {
