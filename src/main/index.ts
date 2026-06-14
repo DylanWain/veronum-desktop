@@ -37,6 +37,7 @@ import { installContextMenu } from "./context-menu";
 import { killAllTasks } from "./tasks";
 import { initAutoUpdate } from "./autoUpdate";
 import { registerSessionReaders } from "./sessionReaders";
+import { augmentProcessPath } from "./claudeBin";
 
 /** The model key for the LOCAL agent loop. Resolution order:
  *  1. ANTHROPIC_API_KEY env (dev override)
@@ -530,12 +531,20 @@ async function createWindow(): Promise<void> {
   }
 
   const url = await resolveLoadUrl();
-  void win.loadURL(url);
+  // The product lives at /app — the site homepage (/) is the marketing
+  // landing. Resolve /app against whatever base we load from (live site,
+  // bundled server, or a VERONUM_SITE_URL override).
+  void win.loadURL(new URL("/app", url).toString());
 }
 
 app.whenReady().then(async () => {
   loadGrantedRoots();
   registerIpc();
+  // Merge the user's login-shell PATH into process.env BEFORE any `claude`
+  // spawn. Launched from /Applications, Electron inherits only the bare
+  // system PATH, so a `claude` installed via bun/volta/nvm/asdf/mise would
+  // otherwise be invisible (`spawn claude ENOENT`).
+  augmentProcessPath();
   // Read-only IPC for local AI-coding session transcripts (Claude Code,
   // Cursor, Codex) so the website can surface them inside Veronum.
   registerSessionReaders();
