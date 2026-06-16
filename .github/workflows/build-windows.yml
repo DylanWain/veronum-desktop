@@ -1,0 +1,27 @@
+name: build-windows
+
+# Cross-build the Windows installer on a Windows runner — it can't be built
+# on the maintainer's Mac (no Wine). electron-builder produces the (unsigned)
+# NSIS .exe + latest.yml and publishes them to this repo's GitHub Releases
+# for the current package.json version. Trigger manually from the Actions tab
+# or with `gh workflow run build-windows.yml`.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        run: npm ci
+      - name: Build + publish Windows installer
+        run: npm run dist:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

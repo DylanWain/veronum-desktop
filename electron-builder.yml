@@ -69,6 +69,24 @@ dmg:
       type: link
       path: /Applications
 
+# Windows. Cross-built on a Windows CI runner (no Wine on the Mac dev box).
+# Unsigned for now — first-launch shows a SmartScreen notice until we add a
+# code-signing cert. electron-builder derives the .ico from build/icon.png.
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # Version-less name so /releases/latest/download/Veronum-Setup.exe always
+  # resolves to the newest installer.
+  artifactName: ${productName}-Setup.${ext}
+
+nsis:
+  oneClick: true
+  perMachine: false
+  allowToChangeInstallationDirectory: false
+
 # Update feed. electron-builder uploads the dmg, zip, blockmap and a
 # generated latest-mac.yml to GitHub Releases on `--publish`, and the
 # packaged app reads this same config (baked in as app-update.yml) to know

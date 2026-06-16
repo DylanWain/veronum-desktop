@@ -15,6 +15,7 @@
     "dist:mac": "electron-vite build && electron-builder --mac",
     "dist:mac:dev": "electron-vite build && electron-builder --mac --publish never",
     "release:mac": "electron-vite build && electron-builder --mac --publish always",
+    "dist:win": "electron-vite build && electron-builder --win --publish always",
     "postinstall": "electron-builder install-app-deps"
   },
   "devDependencies": {
