@@ -53,8 +53,18 @@ export interface SessionMessage {
   timestamp?: string | null;
 }
 
+/** A file the conversation worked on — surfaced in the code panel. */
+export interface SessionFile {
+  /** Path relative to the session's cwd when resolvable, else absolute. */
+  path: string;
+  content: string;
+}
+
 /** Parsed-conversation result the getSession handlers return. */
 export interface ParsedSession {
   title: string;
   messages: SessionMessage[];
+  /** Files the conversation created/edited/read, with their current
+   *  on-disk content, for the code panel. Absent when none resolve. */
+  files?: SessionFile[];
 }

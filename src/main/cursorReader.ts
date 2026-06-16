@@ -26,6 +26,7 @@ import { promises as fs, statSync, readdirSync, readFileSync } from "node:fs";
 import { join, basename } from "node:path";
 import { homedir } from "node:os";
 import type { SessionProject, SessionSummary, ParsedSession } from "./sessionTypes";
+import { readTouchedFiles } from "./sessionFiles";
 
 const CURSOR_USER_DIR = join(homedir(), "Library", "Application Support", "Cursor", "User");
 const WORKSPACE_DIR = join(CURSOR_USER_DIR, "workspaceStorage");
@@ -188,7 +189,7 @@ export function listSessions(cwd: string): SessionSummary[] {
 
 /** Parser bound to the JSONL path — preserves the original failure shape
  *  ({ ok:false }) intent by returning an empty session on read error. */
-async function parseCursorJsonl(jsonlPath: string): Promise<ParsedSession> {
+async function parseCursorJsonl(jsonlPath: string, cwd: string | null): Promise<ParsedSession> {
   let raw: string;
   try {
     raw = await fs.readFile(jsonlPath, "utf-8");
@@ -197,6 +198,7 @@ async function parseCursorJsonl(jsonlPath: string): Promise<ParsedSession> {
   }
   const lines = raw.split("\n").filter(Boolean);
   const messages: ParsedSession["messages"] = [];
+  const touched = new Set<string>();
   let title = "";
   let userIdx = 0;
   let asstIdx = 0;
@@ -207,6 +209,20 @@ async function parseCursorJsonl(jsonlPath: string): Promise<ParsedSession> {
     } catch {
       continue;
     }
+    // Record file paths from tool_use blocks (Write/StrReplace/ApplyPatch/
+    // Read all carry an absolute `input.path`) so the code panel can read
+    // those files — regardless of whether the turn carried chat text.
+    const content = obj?.message?.content;
+    if (Array.isArray(content)) {
+      for (const b of content) {
+        if (
+          b && typeof b === "object" && b.type === "tool_use" &&
+          b.input && typeof b.input.path === "string" && b.input.path
+        ) {
+          touched.add(b.input.path);
+        }
+      }
+    }
     const role = obj.role;
     if (role !== "user" && role !== "assistant") continue;
     const text = stripUserQueryWrapper(extractFirstText(obj));
@@ -215,7 +231,8 @@ async function parseCursorJsonl(jsonlPath: string): Promise<ParsedSession> {
     const id = role === "user" ? `u-${userIdx++}` : `a-${asstIdx++}`;
     messages.push({ id, role, text });
   }
-  return { title, messages };
+  const files = await readTouchedFiles([...touched], cwd);
+  return { title, messages, files };
 }
 
 /** Read every turn in a transcript and shape it for the renderer. */
@@ -230,5 +247,5 @@ export async function getSession(cwd: string, sessionId: string): Promise<Parsed
     sessionId,
     `${sessionId}.jsonl`,
   );
-  return parseCursorJsonl(jsonlPath);
+  return parseCursorJsonl(jsonlPath, cwd);
 }

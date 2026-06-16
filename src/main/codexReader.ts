@@ -36,6 +36,7 @@ import { promises as fs, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { SessionSummary, ParsedSession, SessionMessage } from "./sessionTypes";
+import { readTouchedFiles } from "./sessionFiles";
 
 const CODEX_DIR = join(homedir(), ".codex");
 const CODEX_SESSIONS_DIR = join(CODEX_DIR, "sessions");
@@ -53,6 +54,10 @@ interface CodexLine {
     cwd?: string;
     model?: string;
     message?: string;
+    /** custom_tool_call: tool name (e.g. "apply_patch"). */
+    name?: string;
+    /** custom_tool_call: the raw input (apply_patch patch body). */
+    input?: string;
   };
 }
 
@@ -123,18 +128,35 @@ async function collectRolloutFiles(dir: string): Promise<string[]> {
   return out;
 }
 
-/** Parse one Codex rollout JSONL into id + title + model + messages.
- *  Single pass: reads session_meta (id), turn_context (model), and the
- *  event_msg user/agent prose. */
+/** Pull touched file paths out of a Codex apply_patch body. The format is
+ *  `*** Add File: <path>` / `*** Update File: <path>` / `*** Delete File:
+ *  <path>` — paths are absolute. */
+function patchPaths(patch: string): string[] {
+  const out: string[] = [];
+  const re = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(patch)) !== null) {
+    const p = m[1].trim();
+    if (p) out.push(p);
+  }
+  return out;
+}
+
+/** Parse one Codex rollout JSONL into id + title + model + messages + the
+ *  files its apply_patch calls touched. Single pass over the rollout. */
 function parseCodexRollout(raw: string): {
   id: string | null;
   title: string;
   model: string | null;
   messages: SessionMessage[];
+  touchedPaths: string[];
+  cwd: string | null;
 } {
   const lines = raw.split("\n").filter(Boolean);
   const messages: SessionMessage[] = [];
+  const touched = new Set<string>();
   let id: string | null = null;
+  let cwd: string | null = null;
   let model: string | null = null;
   let title = "";
   let userIdx = 0;
@@ -150,11 +172,20 @@ function parseCodexRollout(raw: string): {
     if (!p) continue;
     if (obj.type === "session_meta") {
       if (typeof p.id === "string") id = p.id;
+      if (typeof p.cwd === "string") cwd = p.cwd;
       continue;
     }
     if (obj.type === "turn_context") {
       // First turn_context model wins; keep it stable for the session.
       if (!model && typeof p.model === "string") model = p.model;
+      continue;
+    }
+    // File edits live in apply_patch tool calls (custom_tool_call). Record
+    // the absolute paths they touched so the code panel can read them.
+    if (obj.type === "response_item") {
+      if (p.type === "custom_tool_call" && p.name === "apply_patch" && typeof p.input === "string") {
+        for (const fp of patchPaths(p.input)) touched.add(fp);
+      }
       continue;
     }
     if (obj.type !== "event_msg") continue;
@@ -181,7 +212,7 @@ function parseCodexRollout(raw: string): {
       merged.push({ ...msg });
     }
   }
-  return { id, title, model, messages: merged };
+  return { id, title, model, messages: merged, touchedPaths: [...touched], cwd };
 }
 
 /** Lightweight title/model/id sniff without parsing the whole file —
@@ -345,5 +376,6 @@ export async function getSession(
     return { ok: false, error: e instanceof Error ? e.message : "read failed" };
   }
   const parsed = parseCodexRollout(raw);
-  return { ok: true, session: { title: parsed.title, messages: parsed.messages } };
+  const files = await readTouchedFiles(parsed.touchedPaths, parsed.cwd);
+  return { ok: true, session: { title: parsed.title, messages: parsed.messages, files } };
 }

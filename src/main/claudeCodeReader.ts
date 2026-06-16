@@ -31,6 +31,7 @@ import {
   stripSystemInjections,
   stripVeronumContext,
 } from "./sessionText";
+import { readTouchedFiles } from "./sessionFiles";
 import type {
   SessionProject,
   SessionSummary,
@@ -387,10 +388,13 @@ async function loadSessionMeta(): Promise<SessionMeta> {
  *  Drops tool_use/tool_result blocks, strips system injections, surfaces
  *  inline images, and collapses consecutive assistant turns into one
  *  bubble. Pure function of file contents. */
-async function parseClaudeJsonl(fp: string): Promise<ParsedSession> {
+async function parseClaudeJsonl(
+  fp: string,
+): Promise<ParsedSession & { touchedPaths: string[] }> {
   const data = await fs.readFile(fp, "utf8");
   const lines = data.split("\n").filter(Boolean);
   const messages: SessionMessage[] = [];
+  const touched = new Set<string>();
   let title = "";
   for (const line of lines) {
     let obj: RawJsonlObj;
@@ -436,8 +440,13 @@ async function parseClaudeJsonl(fp: string): Promise<ParsedSession> {
           // An image counts as user-authored content for this turn —
           // without this, an image-only user turn would be dropped.
           if (obj.type === "user") hasUserText = true;
+        } else if (blk.type === "tool_use" && blk.input && typeof blk.input === "object") {
+          // We don't render tool calls in the chat, but we DO record which
+          // files they touched so the code panel can surface those files.
+          const filePath = blk.input.file_path;
+          if (typeof filePath === "string" && filePath) touched.add(filePath);
         }
-        // tool_use + tool_result intentionally dropped.
+        // tool_use + tool_result intentionally dropped from the chat text.
       }
       text = parts.join("").trim();
     }
@@ -474,7 +483,7 @@ async function parseClaudeJsonl(fp: string): Promise<ParsedSession> {
       merged.push({ ...msg });
     }
   }
-  return { title, messages: merged };
+  return { title, messages: merged, touchedPaths: [...touched] };
 }
 
 // ── Public API ────────────────────────────────────────────────────────
@@ -634,7 +643,10 @@ export async function getSession(
   const meta = await loadSessionMeta();
   const m = meta.byUuid.get(sessionId);
   if (m?.title) title = m.title;
-  return { title, messages: parsed.messages };
+  // The conversation's code, for the code panel: read the current on-disk
+  // content of every file it touched, scoped to the project cwd (= id).
+  const files = await readTouchedFiles(parsed.touchedPaths, projectId);
+  return { title, messages: parsed.messages, files };
 }
 
 // Re-exported for internal reuse / testing; intentionally part of the
