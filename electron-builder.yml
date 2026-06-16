@@ -59,6 +59,9 @@ mac:
 
 dmg:
   title: ${productName} ${version}
+  # Stable, version-less name so /releases/latest/download/Veronum.dmg
+  # always resolves to the newest build (matches the Windows artifact).
+  artifactName: ${productName}.${ext}
   icon: build/icon.icns
   iconSize: 100
   contents:

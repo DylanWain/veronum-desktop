@@ -1,7 +1,7 @@
 {
   "name": "veronum-desktop",
   "productName": "Veronum",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Veronum as a native desktop app — same UI as thetoolswebsite.com, plus zero-popup live disk access.",
   "private": true,
   "main": "out/main/index.js",

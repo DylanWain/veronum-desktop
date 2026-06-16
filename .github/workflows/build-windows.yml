@@ -1,10 +1,15 @@
-name: build-windows
+name: build-desktop
 
-# Cross-build the Windows installer on a Windows runner — it can't be built
-# on the maintainer's Mac (no Wine). electron-builder produces the (unsigned)
-# NSIS .exe + latest.yml and publishes them to this repo's GitHub Releases
-# for the current package.json version. Trigger manually from the Actions tab
-# or with `gh workflow run build-windows.yml`.
+# Cross-builds BOTH the Windows and macOS installers for veronum-desktop and
+# publishes them to this repo's GitHub Releases for the current package.json
+# version. Trigger from the Actions tab or:
+#   gh workflow run build-windows.yml --repo DylanWain/veronum-desktop
+#
+# macOS is built UNSIGNED here — the CI runner has no Apple Developer cert or
+# notary keychain. CSC_IDENTITY_AUTO_DISCOVERY=false skips signing without
+# failing, and SKIP_NOTARIZE=1 makes the afterSign hook return early. To ship
+# a properly signed + notarized Mac build to the SAME release, run
+# `npm run release:mac` locally (your Keychain has the Developer ID cert).
 on:
   workflow_dispatch:
 
@@ -19,9 +24,26 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
-      - name: Install dependencies
-        run: npm ci
+      - run: npm ci
       - name: Build + publish Windows installer
         run: npm run dist:win
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  mac:
+    # Run after windows so the release for this version already exists — the
+    # mac job just adds its assets, avoiding a concurrent create race.
+    needs: windows
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - name: Build + publish (unsigned) macOS installer
+        run: npm run release:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+          SKIP_NOTARIZE: "1"
